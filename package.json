@@ -1,0 +1,23 @@
+{
+  "name": "cns-haystack",
+  "version": "1.1.0",
+  "description": "Haystack CNS client",
+  "author": "Padi, Inc",
+  "license": "ISC",
+  "main": "index.js",
+  "bin": {
+    "haystack": "haystack.js"
+  },
+  "scripts": {
+    "start": "dapr run --app-id cns-haystack --app-port 3100 --resources-path ../cns-dapr/components --log-level error -- node index",
+    "stop": "dapr stop --app-id cns-haystack",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "@dapr/dapr": "^3.1.2",
+    "colors": "^1.4.0",
+    "dotenv": "^16.4.5",
+    "table": "^6.9.0",
+    "object-merge": "^2.5.1"
+  }
+}
