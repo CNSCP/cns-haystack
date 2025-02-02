@@ -11,7 +11,8 @@
   "scripts": {
     "start": "dapr run --app-id cns-haystack --app-port 3100 --resources-path ../cns-dapr/components --log-level error -- node index",
     "stop": "dapr stop --app-id cns-haystack",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "production": "node index"
   },
   "dependencies": {
     "@dapr/dapr": "^3.1.2",
