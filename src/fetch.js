@@ -15,8 +15,7 @@ function request(method, url, headers, data) {
   // I promise to
   return new Promise((resolve, reject) => {
     // Show request
-    if (logDebug !== undefined)
-      logDebug('REQ:', url, (data || '').replaceAll('\n', '\\n'));
+    debug('REQ: ' + url + ' ' + (data || '').replaceAll('\n', '\\n'));
 
     // What protocol?
     const prot = url.startsWith('https://')?https:http;
@@ -27,16 +26,12 @@ function request(method, url, headers, data) {
       headers: headers
     }, (res) => {
       // Show response
-      if (logDebug !== undefined)
-        logDebug('RES:', res.statusCode, res.statusMessage);
-
+      debug('RES: ' + res.statusCode + ' ' + res.statusMessage);
       resolve(res);
     })
     .on('error', (e) => {
       // Show error
-      if (logDebug !== undefined)
-        logDebug('ERR:', e.message);
-
+      debug('ERR: ' + e.message);
       reject(e);
     });
 

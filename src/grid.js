@@ -16,8 +16,6 @@ const E_CONTENT = 'Unsupported content type';
 
 // Content types
 
-//const C_CSV = 'text/csv';
-//const C_XML = 'text/xml';
 const C_ZINC = 'text/zinc';
 const C_JSON = 'application/json';
 

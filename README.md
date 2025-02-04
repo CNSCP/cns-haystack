@@ -13,7 +13,7 @@
 
 This repository contains the CNS Haystack application that talks to the CNS Dapr Sidecar, written in [Node.js](https://nodejs.org/en/about) and using the [Dapr SDK](https://docs.dapr.io/developing-applications/sdks/js/). The application is used in conjunction with CNS Dapr and it is assumed this is already installed and running (See the [CNS Dapr](https://github.com/CNSCP/cns-dapr) repository for details).
 
-The application ......
+The application monitors various CNS profiles and issues requests to a Haystack server.
 
 ## Installing
 
@@ -59,13 +59,88 @@ The app uses the following environment variables to configure itself:
 | HAYSTACK_PASS    | Haystack auth password      | ''                          |
 | HAYSTACK_VERSION | Haystack protocol version   | '3.0'                       |
 | HAYSTACK_FORMAT  | Haystack protocol format    | 'text/zinc'                 |
+| HAYSTACK_LEASE   | Haystack lease time         | '1min'                      |
+| HAYSTACK_POLL    | Haystack poll time          | '5sec'                      |
 
 Alternatively, variables can be stored in a `.env` file in the project directory.
 
-### Command line tool
+### Supported profiles
+
+The following profiles are consumed by the application:
+
+#### cp:haystack.op.v1:provider
+
+Represents a Haystack operation request.
+
+| Role     | Property   | Description            | Example                     |
+|----------|------------|------------------------|-----------------------------|
+| Consumer | op         | Request operation      | 'read'                      |
+| Consumer | request    | Request grid           | 'filter=ahu'                |
+| Consumer | method     | Request method         | 'post'                      |
+| Consumer | content    | Request mime format    | 'text/zinc'                 |
+| Provider | status     | Response status        | 'ok' or 'error'             |
+| Provider | error      | Response error text    | ''                          |
+| Provider | response   | Response raw data      | 'ver:"3.0"...'              |
+
+Setting `status` to anything but 'ok' or 'error' will trigger the request.
+
+#### cp:padi.value.v1:provider
+
+Represents a value from a Haystack database.
+
+| Role     | Property   | Description            | Example                     |
+|----------|------------|------------------------|-----------------------------|
+| Consumer | id         | Request grid           | 'id=@a-0000;dis'            |
+| Provider | status     | Response status        | 'ok' or 'error'             |
+| Provider | value      | Response value         | 'Alpha'                     |
+
+If `id` contains an id tag, a watch subscription is made and watch polling is started. \
+Changes made to the id record are reflected in the `value` property.
+
+Otherwise, setting `status` to anything but 'ok' or 'error' will trigger a read operation.
+
+#### cp:padi.dataset.v1:provider
+
+Represents one or more rows from a Haystack database.
+
+| Role     | Property   | Description            | Example                     |
+|----------|------------|------------------------|-----------------------------|
+| Consumer | filter     | Request grid           | 'id=@a-0000'                |
+| Provider | status     | Response status        | 'ok' or 'error'             |
+| Provider | labels     | Response column names  | 'id,tz,dis....'             |
+| Provider | values     | Response row values    | '@a-0000,Denver,Alpha...'   |
+
+If `id` contains an id tag, a watch subscription is made and watch polling is started. \
+Changes made to the id record are reflected in the `values` property.
+
+Otherwise, setting `status` to anything but 'ok' or 'error' will trigger a read operation.
+
+## Command line tool
+
+### Installing
+
+Install the tool globally with:
 
 ```sh
 npm install -g .
+```
+
+Or run it with:
+
+```sh
+node haystack
+```
+
+### Usage
+
+usage: haystack [options] uri [op] [name:value...] [name=value...]
+
+### Examples
+
+```sh
+haystack -u guest -p guest http://localhost:8080/api about
+haystack -u guest -p guest http://localhost:8080/api read filter=ahu
+haystack -u guest -p guest http://localhost:8080/api watchSub watchDis:cns-haystack lease:1min id=@a-0001 id=@a-0020 id=@a-0039
 ```
 
 ## Haxall
@@ -110,7 +185,7 @@ bin/hx run cns -noAuth
 
 ### Importing data
 
-With Haxall running, point your browser to 'http://localhost:8080' and login to the Haxall shell. At the shell prompt type:
+With Haxall running, point your browser to 'http://localhost:8080' and login to the Haxall Shell. At the shell prompt type:
 
 ```
 ioReadZinc(`https://project-haystack.org/example/download/alpha.zinc`).map(r=>diff(null, r, {add}).commit)

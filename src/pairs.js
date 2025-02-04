@@ -1,28 +1,40 @@
-// pairs.js - Name / value pairs
+// pairs.js - Name and value pairs
 // Copyright 2025 Padi, Inc. All Rights Reserved.
 
 'use strict';
 
 // Value pairs
 
-//
+// Parse values
 function parse(req, s) {
-  //
+  // Not valid?
   if (typeof s !== 'string' || s === '') return;
 
+  // Split params
   const params = s.split(',');
 
   for (const param of params) {
-    const parts = param.split('=');
+    // Split pair
+    const sep = param.includes(':')?':':'=';
+    const parts = param.split(sep);
 
     const name = parts.shift() || '';
-    const value = parts.join('=') || '';
+    const value = parts.join(sep) || '';
 
-    add(req, name, value);
+    // Add value
+    if (sep === ':') meta(req, name, value);
+    else add(req, name, value);
   }
 }
 
-// Add value
+// Add meta value
+function meta(req, name, value) {
+  // Create meta?
+  if (req.meta === undefined) req.meta = {};
+  req.meta[name] = value;
+}
+
+// Add grid value
 function add(req, name, value) {
   // Create containers?
   if (req.names === undefined) req.names = [];
@@ -94,6 +106,25 @@ function getRows(req) {
   return cy;
 }
 
+// Get column index
+function getCol(req, name) {
+  for (var x = 0; x < req.names.length; x++)
+    if (req.names[x] === name) return x;
+
+  return -1;
+}
+
+// Get row data
+function getRow(req, y) {
+  var value = '';
+
+  for (var x = 0; x < req.names.length; x++) {
+    if (x > 0) value += ',';
+    value += getValue(req, x, y);
+  }
+  return value;
+}
+
 // Get name of column
 function getName(req, x) {
   return req.names[x];
@@ -110,7 +141,7 @@ function getValue(req, x, y) {
   return (value === undefined)?'':value;
 }
 
-// Get typeof value
+// Get type of value
 function getType(raw) {
   switch (typeof raw) {
     case 'undefined':
@@ -135,6 +166,8 @@ function getType(raw) {
 
 // Exports
 
+exports.meta = meta;
+
 exports.parse = parse;
 exports.add = add;
 exports.reduce = reduce;
@@ -143,6 +176,8 @@ exports.clear = clear;
 
 exports.getCols = getCols;
 exports.getRows = getRows;
+exports.getCol = getCol;
+exports.getRow = getRow;
 
 exports.getName = getName;
 exports.getRaw = getRaw;

@@ -16,7 +16,7 @@ const E_GRID = 'Response is not grid';
 
 // Convert to zinc
 function toZinc(req) {
-  var grid = 'ver:\"' + req.version + '\"\n';
+  var grid = toMeta(req);
 
   const cx = pairs.getCols(req);
   const cy = pairs.getRows(req);
@@ -33,6 +33,20 @@ function toZinc(req) {
   } else grid += 'empty\n';
 
   return grid;
+}
+
+// Convert zinc meta
+function toMeta(req) {
+  const meta = req.meta || {};
+  var header = 'ver:"' + req.version + '"';
+
+  for (const name in meta) {
+    const value = toType(meta[name]);
+
+    header += ' ' + name;
+    if (value !== '""') header += ':' + value;
+  }
+  return header + '\n';
 }
 
 // Convert to zinc type
@@ -53,7 +67,7 @@ function toType(value) {
     return value;
 
   if (typeof value === 'string') {
-    if (isFinite(value))
+    if (/^\d/.test(value))
       return value;
 
     if (value.startsWith('@'))
@@ -65,14 +79,15 @@ function toType(value) {
     if (value.startsWith('http'))
       return '`' + value + '`';
 
+    if (value[10] === 'T' && value.endsWith('Z'))
+      return value;
+
     return '"' + value + '"';
   }
 
   if (typeof value === 'object') {
     if (value instanceof Date)
-      return value.toISOString(); // + timezone
-
-
+      return value.toISOString();
   }
   return value;
 }
@@ -85,17 +100,16 @@ function fromZinc(res) {
   if (!header.startsWith === 'ver')
     return E_DATA + ': ' + res.content;
 
-  const meta = fromHeader(header);
+  const meta = fromMeta(header);
 
   res.version = meta.ver;
+  res.meta = meta;
 
   res.names = [];
   res.values = [];
 
   if (meta.err !== undefined)
     return meta.dis;
-
-    //if (meta.incomplete)
 
   const cols = lines.shift() || '';
 
@@ -121,8 +135,8 @@ function fromZinc(res) {
   return null;
 }
 
-// Convert zinc header
-function fromHeader(line) {
+// Convert zinc meta
+function fromMeta(line) {
   const meta = {};
 
   var l = line.length;
@@ -136,8 +150,18 @@ function fromHeader(line) {
       name += line[n++];
 
     if (n < l) {
-      if (line[n++] === ':')
-        value = fromParam(line, n, l);
+      if (line[n++] === ':') {
+        var q = false;
+
+        while(n < l && (q || line[n] !== ' ')) {
+          if ((line[n] === '"' && line[n - 1] !== '\\') || line[n] === '`' ||
+            line[n] === '(' || line[n] === ')' ||
+            line[n] === '[' || line[n] === ']' ||
+            line[n] === '{' || line[n] === '}') q = !q;
+
+          value += line[n++];
+        }
+      } else value = 'M';
     }
 
     if (name !== '')
@@ -158,7 +182,11 @@ function fromRow(line) {
     var q = false;
 
     while(n < l && (q || line[n] !== ',')) {
-      if (line[n] === '"' || line[n] === '`' || line[n] === '(' || line[n] === ')' || line[n] === '[' || line[n] === ']' || line[n] === '{' || line[n] === '}') q = !q;
+      if ((line[n] === '"' && line[n - 1] !== '\\') || line[n] === '`' ||
+        line[n] === '(' || line[n] === ')' ||
+        line[n] === '[' || line[n] === ']' ||
+        line[n] === '{' || line[n] === '}') q = !q;
+
       value += line[n++];
     }
 
@@ -167,18 +195,6 @@ function fromRow(line) {
     values.push(fromType(value));
   }
   return values;
-}
-
-// Convert zinc param
-function fromParam(line, n, l) {
-  var value = '';
-  var q = false;
-
-  while(n < l && (q || line[n] !== ' ')) {
-    if (line[n] === '"' || line[n] === '`' || line[n] === '{' || line[n] === '}') q = !q;
-    value += line[n++];
-  }
-  return value;
 }
 
 // Convert from zinc type
@@ -196,13 +212,10 @@ function fromType(value) {
     return false;
 
   if (value.startsWith('"') || value.startsWith('`'))
-    return value.substring(1, value.length - 1).replaceAll('\\n', '\n');
+    return value.substring(1, value.length - 1).replaceAll('\\"', '"').replaceAll('\\n', '\n');
 
-  if (value[10] === 'T' && value[23] === 'Z')
-    return new Date(value.split(' ')[0]);
-
-// geolocation
-//  if (value.startsWith('C(') && value.endsWith(')'))
+  if (value[10] === 'T' && value.endsWith('Z'))
+    return new Date(value);
 
   return value;
 }

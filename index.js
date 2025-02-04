@@ -34,7 +34,9 @@ const defaults = {
   HAYSTACK_USER: '',
   HAYSTACK_PASS: '',
   HAYSTACK_VERSION: '3.0',
-  HAYSTACK_FORMAT: 'text/zinc'
+  HAYSTACK_FORMAT: 'text/zinc',
+  HAYSTACK_LEASE: '1min',
+  HAYSTACK_POLL: '5sec'
 };
 
 // Config
@@ -51,7 +53,9 @@ const config = {
   HAYSTACK_USER: process.env.HAYSTACK_USER || defaults.HAYSTACK_USER,
   HAYSTACK_PASS: process.env.HAYSTACK_PASS || defaults.HAYSTACK_PASS,
   HAYSTACK_VERSION: process.env.HAYSTACK_VERSION || defaults.HAYSTACK_VERSION,
-  HAYSTACK_FORMAT: process.env.HAYSTACK_FORMAT || defaults.HAYSTACK_FORMAT
+  HAYSTACK_FORMAT: process.env.HAYSTACK_FORMAT || defaults.HAYSTACK_FORMAT,
+  HAYSTACK_LEASE: process.env.HAYSTACK_LEASE || defaults.HAYSTACK_LEASE,
+  HAYSTACK_POLL: process.env.HAYSTACK_POLL || defaults.HAYSTACK_POLL
 };
 
 // Constants
@@ -89,52 +93,29 @@ var context = 'node/contexts/' + config.CNS_CONTEXT;
 var options = {};
 var cache = {};
 var changes = {};
-//var haystack = {};
+var haystack = {};
+var subscribers = {};
+var watches = {};
+var unwatches = {};
 
 var sync;
 
 // Fetch operation
-async function fetchOp(method, op, request) {
-  // Create session request
-  const ses = {
-    uri: config.HAYSTACK_URI,
-    username: config.HAYSTACK_USER,
-    password: config.HAYSTACK_PASS
-  };
-
-  const req = {
-    version: config.HAYSTACK_VERSION,
-    content: config.HAYSTACK_FORMAT,
-    method: method,
-    op: op
-  };
-
-  // Parse filter
-  pairs.parse(req, request);
-
-  // Get properties
+async function requestOp(req) {
   var status = 'error';
-  var error = null;
-  var response = null;
+  var error = '';
+  var response = '';
 
   try {
-    // Open session
-    await session.start(ses);
-
     // Get request
-    const res = await session.request(ses, req);
+    const res = await session.request(haystack, req);
 
-    error = grid.fromGrid(res);
     response = res.data;
-
-    if (error === null) status = 'ok';
+    status = 'ok';
   } catch (e) {
     // Failure
     error = e.message;
   }
-
-  // End session
-  await session.end(ses);
 
   return {
     status: status,
@@ -144,43 +125,16 @@ async function fetchOp(method, op, request) {
 }
 
 // Fetch dataset
-async function fetchDataset(filter) {
-  // Create session request
-  const ses = {
-    uri: config.HAYSTACK_URI,
-    username: config.HAYSTACK_USER,
-    password: config.HAYSTACK_PASS
-  };
-
-  const req = {
-    version: config.HAYSTACK_VERSION,
-    content: config.HAYSTACK_FORMAT,
-    op: 'read'
-  };
-
-  // Parse filter
-  var columns;
-
-  const parts = filter.split(';');
-  pairs.parse(req, parts[0]);
-
-  if (parts[1] !== undefined)
-    columns = parts[1].split(',');
-
-  // Get properties
+async function requestDataset(req, columns) {
   var status = 'error';
-  var labels = '';
+  var labels = 'Error';
   var values = '';
 
   try {
-    // Open session
-    await session.start(ses);
-
     // Get request
-    const res = await session.request(ses, req);
-    const error = grid.fromGrid(res);
+    const res = await session.request(haystack, req);
 
-    if (error === null) {
+    if (res.error === null) {
       // Reduce to specified columns?
       if (columns !== undefined)
         pairs.reduce(res, columns);
@@ -194,13 +148,11 @@ async function fetchDataset(filter) {
         values += val[0];
       }
       status = 'ok';
-    }
+    } else values = res.error;
   } catch (e) {
     // Failure
+    values = e.message;
   }
-
-  // End session
-  await session.end(ses);
 
   return {
     status: status,
@@ -210,42 +162,15 @@ async function fetchDataset(filter) {
 }
 
 // Fetch value
-async function fetchValue(id) {
-  // Create session request
-  const ses = {
-    uri: config.HAYSTACK_URI,
-    username: config.HAYSTACK_USER,
-    password: config.HAYSTACK_PASS
-  };
-
-  const req = {
-    version: config.HAYSTACK_VERSION,
-    content: config.HAYSTACK_FORMAT,
-    op: 'read'
-  };
-
-  // Parse filter
-  var columns;
-
-  const parts = id.split(';');
-  pairs.parse(req, parts[0]);
-
-  if (parts[1] !== undefined)
-    columns = parts[1].split(',');
-
-  // Get properties
+async function requestValue(req, columns) {
   var status = 'error';
   var value = '';
 
   try {
-    // Open session
-    await session.start(ses);
-
     // Get request
-    const res = await session.request(ses, req);
-    const error = grid.fromGrid(res);
+    const res = await session.request(haystack, req);
 
-    if (error === null) {
+    if (res.error === null) {
       // Reduce to specified columns?
       if (columns !== undefined)
         pairs.reduce(res, columns);
@@ -256,14 +181,11 @@ async function fetchValue(id) {
         value += val[0];
       }
       status = 'ok';
-    } else value = error;
+    } else value = res.error;
   } catch (e) {
     // Failure
     value = e.message;
   }
-
-  // End session
-  await session.end(ses);
 
   return {
     status: status,
@@ -272,13 +194,25 @@ async function fetchValue(id) {
 }
 
 // Process haystack op
-async function processOp(properties) {
+async function processOp(profile, connId, conn) {
+  const properties = conn.properties || {};
+
   const method = (properties.method || '').toUpperCase();
   const op = properties.op || '';
   const request = properties.request || '';
+  const content = properties.content || 'text/zinc';
   const status = properties.status || '';
 
-  var result;
+  // Create request
+  const req = {
+    method: method,
+    accept: content,
+    op: op,
+    raw: true
+  };
+
+  // Parse filter
+  pairs.parse(req, request);
 
   // What status?
   switch (status) {
@@ -288,18 +222,52 @@ async function processOp(properties) {
       break;
     default:
       // Fetch op request
-      result = await fetchOp(method, op, request);
+      const res = await requestOp(req);
+      await updateConn(profile, connId, res);
       break;
   }
-  return result;
 }
 
 // Process dataset connection
-async function processDataset(properties) {
+async function processDataset(profile, connId, conn) {
+  const properties = conn.properties || {};
+
   const filter = properties.filter || '';
   const status = properties.status || '';
+  const labels = properties.labels || '';
+  const values = properties.values || '';
 
-  var result;
+  // Parse filter
+  var columns;
+
+  const parts = filter.split(';');
+  const names = parts[0];
+
+  if (parts[1] !== undefined)
+    columns = parts[1].split(',');
+
+  // Create request
+  const req = {
+    op: 'read'
+  };
+
+  // Parse names
+  pairs.parse(req, names);
+
+  // Specific id?
+  if (names.includes('id')) {
+    // Add subscription
+    subscribe(req, profile, connId, columns, {
+      status: status,
+      labels: labels,
+      values: values
+    });
+
+    return;
+  }
+
+  // Remove subscription
+  unsubscribe(connId);
 
   // What status?
   switch (status) {
@@ -308,19 +276,51 @@ async function processDataset(properties) {
       // Already processed
       break;
     default:
-      // Fetch value
-      result = await fetchDataset(filter);
+      // Fetch request
+      const res = await requestDataset(req, columns);
+      await updateConn(profile, connId, res);
       break;
   }
-  return result;
 }
 
 // Process value connection
-async function processValue(properties) {
+async function processValue(profile, connId, conn) {
+  const properties = conn.properties || {};
+
   const id = properties.id || '';
   const status = properties.status || '';
+  const value = properties.value || '';
 
-  var result;
+  // Parse id
+  var columns;
+
+  const parts = id.split(';');
+  const names = parts[0];
+
+  if (parts[1] !== undefined)
+    columns = parts[1].split(',');
+
+  // Create request
+  const req = {
+    op: 'read'
+  };
+
+  // Parse names
+  pairs.parse(req, names);
+
+  // Specific id?
+  if (names.includes('id')) {
+    // Add subscription
+    subscribe(req, profile, connId, columns, {
+      status: status,
+      value: value
+    });
+
+    return;
+  }
+
+  // Remove subscription
+  unsubscribe(connId);
 
   // What status?
   switch (status) {
@@ -329,43 +329,216 @@ async function processValue(properties) {
       // Already processed
       break;
     default:
-      // Fetch value
-      result = await fetchValue(id);
+      // Fetch request
+      const res = await requestValue(req, columns);
+      await updateConn(profile, connId, res);
       break;
   }
-  return result;
+}
+
+// Is id subscribed
+function isSubscribed(id) {
+  for (const connId in subscribers) {
+    const sub = subscribers[connId];
+    if (sub.id === id) return true;
+  }
+  return false;
+}
+
+// Subscribe connection
+function subscribe(req, profile, connId, columns, properties) {
+  // Find id
+  const x = pairs.getCol(req, 'id');
+  const id = pairs.getValue(req, x, 0);
+
+  // Already subscribed?
+  const sub = subscribers[connId];
+
+  if (sub !== undefined) {
+    // Refresh on id change
+    if (sub.id !== id) {
+      const old = sub.id;
+      sub.id = null;
+
+      // Remove old
+      if (isSubscribed(old))
+        haystack.refresh = true;
+      else watchRemove(old);
+
+      // Add new
+      if (isSubscribed(id))
+        haystack.refresh = true;
+      else watchAdd(id);
+
+      sub.id = id;
+    }
+
+    // Refresh on columns change
+    const c1 = sub.columns || [];
+    const c2 = columns || [];
+
+    if (c1.join(',') !== c2.join(',')) {
+      sub.columns = columns;
+      haystack.refresh = true;
+    }
+
+    // Update properties
+    sub.properties = properties;
+    return;
+  }
+
+  // Add subscription
+  subscribers[connId] = {
+    profile: profile,
+    connId: connId,
+    id: id,
+    columns: columns,
+    properties: properties
+  };
+
+  // Add watch
+  watchAdd(id);
+}
+
+// Unsubscribe connection
+function unsubscribe(connId) {
+  // Is subscribed?
+  const conn = subscribers[connId];
+  if (conn === undefined) return;
+
+  const id = conn.id;
+
+  // Remove subscription
+  delete subscribers[connId];
+
+  // Remove watch?
+  if (!isSubscribed(id))
+    watchRemove(id);
+}
+
+// Add to watch list
+function watchAdd(id) {
+  // Already watched?
+  if (haystack.watches !== undefined) {
+    const watch = haystack.watches[id];
+    if (watch !== undefined) return;
+  }
+
+  // Add watch
+  watches[id] = {
+    id: id,
+    watchFn: watchUpdate
+  };
+}
+
+// Remove from watch list
+function watchRemove(id) {
+  // Is watched?
+  if (haystack.watches === undefined) return;
+
+  const watch = haystack.watches[id];
+  if (watch === undefined) return;
+
+  // Remove watch
+  unwatches[id] = {
+    id: id
+  };
+}
+
+// Update watch connections
+async function watchUpdate(watch, res, y) {
+  // Find subscribers
+  for (const connId in subscribers) {
+    const sub = subscribers[connId];
+
+    if (sub.id === watch.id) {
+      // Process properties
+      const columns = sub.columns || res.names;
+      const properties = sub.properties;
+
+      const result = {};
+
+      for (const name in properties) {
+        var value = '';
+
+        switch (name) {
+          case 'status':
+            // Set status
+            value = 'ok';
+            break;
+          case 'labels':
+            // Set labels
+            value = columns.join(',');
+            break;
+          case 'values':
+          case 'value':
+            // Set value
+            for (const name of columns) {
+              const x = pairs.getCol(res, name);
+
+              if (value !== '') value += ',';
+              value += (x === -1)?'':pairs.getValue(res, x, y);
+            }
+            break;
+        }
+
+        // Property changed?
+        if (properties[name] !== value) {
+          // Update result
+          properties[name] = value;
+          result[name] = value;
+        }
+      }
+
+      // Update changes?
+      if (Object.keys(result).length > 0) {
+        // Update connection properties
+        debug('Haystack update ' + connId + ' ' + JSON.stringify(result));
+        await updateConn(sub.profile, connId, result);
+      }
+    }
+  }
+}
+
+// Update connection
+async function updateConn(profile, connId, properties) {
+  try {
+    // Post new properties
+    const res = await client.invoker.invoke(
+      config.CNS_DAPR,
+      context + '/capabilities/' + profile + '/connections/' + connId + '/properties',
+      dapr.HttpMethod.POST,
+      properties);
+
+    // CNS Dapr error?
+    if (res.error !== undefined)
+      throw new Error(res.error);
+  } catch(e) {
+    // Failure
+    error(e);
+  }
 }
 
 // Update connections
 async function updateConns(profile, cap, fn) {
+  // Clear watches
+  watches = {};
+  unwatches = {};
+
   // Look at connections
   const conns = cap.connections;
 
   for (const connId in conns) {
     // Process connection
     const conn = conns[connId];
-    const properties = conn.properties;
 
-    const result = await fn(properties);
-
-    if (result !== undefined) {
-      try {
-        // Post new properties
-        const res = await client.invoker.invoke(
-          config.CNS_DAPR,
-          context + '/capabilities/' + profile + '/connections/' + connId + '/properties',
-          dapr.HttpMethod.POST,
-          result);
-
-        // CNS Dapr error?
-        if (res.error !== undefined)
-          throw new Error(res.error);
-      } catch(e) {
-        // Failure
-        console.error('System Error:', e.message);
-      }
-    }
+    if (conn === null) unsubscribe(connId);
+    else await fn(profile, connId, conn);
   }
+
+  // Add watches
+  await session.subscribe(haystack, watches);
+  await session.unsubscribe(haystack, unwatches);
 }
 
 // Update context
@@ -422,31 +595,33 @@ async function start(args) {
     options.debug = true;
 
   // Output welcome
-  console.log('CNS Haystack', pack.version);
+  print('CNS Haystack ' + pack.version);
 
-  console.log('CNS Haystack on', config.CNS_SERVER_HOST, 'port', config.CNS_SERVER_PORT);
-  console.log('CNS Dapr on', config.CNS_DAPR_HOST, 'port', config.CNS_DAPR_PORT);
+  print('CNS Haystack on ' + config.CNS_SERVER_HOST + ' port ' + config.CNS_SERVER_PORT);
+  print('CNS Dapr on ' + config.CNS_DAPR_HOST + ' port ' + config.CNS_DAPR_PORT);
 
   // No context?
   if (config.CNS_CONTEXT === '')
     throw new Error(E_CONTEXT);
 
-  console.log('CNS context:', config.CNS_CONTEXT);
+  print('CNS context: ' + config.CNS_CONTEXT);
 
-  console.log('Haystack server:', config.HAYSTACK_URI);
-  console.log('Haystack auth:', (config.HAYSTACK_USER === '')?'disabled':'enabled');
-  console.log('Haystack version:', config.HAYSTACK_VERSION);
-  console.log('Haystack format:', config.HAYSTACK_FORMAT);
+  print('Haystack server: ' + config.HAYSTACK_URI);
+  print('Haystack auth: ' + ((config.HAYSTACK_USER === '')?'disabled':'enabled'));
+  print('Haystack protocol: ' + config.HAYSTACK_VERSION + ', ' + config.HAYSTACK_FORMAT + ', ' + config.HAYSTACK_LEASE + ' lease, ' + config.HAYSTACK_POLL + ' poll');
 
   // Create session
-//
-//haystack = {
-//  uri: config.HAYSTACK_URI,
-//  username: config.HAYSTACK_USER,
-//  password: config.HAYSTACK_PASS
-//};
-//  await session.start(haystack);
-//  console.log('Haystack connected');
+  haystack = {
+    uri: config.HAYSTACK_URI,
+    username: config.HAYSTACK_USER,
+    password: config.HAYSTACK_PASS,
+    version: config.HAYSTACK_VERSION,
+    content: config.HAYSTACK_FORMAT,
+    lease: config.HAYSTACK_LEASE,
+    poll: config.HAYSTACK_POLL
+  };
+
+  await session.start(haystack);
 
   // Start client
   await client.start();
@@ -475,26 +650,33 @@ async function start(args) {
   await server.start();
 }
 
-// Catch terminate signal
-//process.on('SIGINT', async () => {
-//  console.log('\rAborted.');
-
-//  await session.end(haystack);
-//  console.log('Haystack disconnected');
-
-//  process.exit(1);
-//});
-
-// Output debug
-global.logDebug = function() {
-  if (options.debug)
-    console.log.apply(null, arguments);
+// Log text to console
+global.print = (text) => {
+  console.log(text);
 }
+
+// Log debug to console
+global.debug = (text) => {
+  if (options.debug)
+    console.debug(text);
+}
+
+// Log error to console
+global.error = (e) => {
+  console.error('System Error:', e.message);
+  debug(e.stack);
+}
+
+// Catch terminate signal
+process.on('SIGINT', async () => {
+  print('\rAborted.');
+
+  await session.end(haystack);
+  process.exit(1);
+});
 
 // Start application
 start(process.argv.slice(2)).catch((e) => {
-  console.error('System Error:', e.message);
-  if (options.debug) console.error(e.stack);
-
+  error(e);
   process.exit(1);
 });

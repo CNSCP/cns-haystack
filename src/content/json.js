@@ -16,6 +16,9 @@ const E_GRID = 'Response is not grid';
 
 // Convert to json
 function toJson(req, names, values) {
+  const meta = req.meta || {};
+  meta.ver = req.version;
+
   const cols = [];
   const rows = [];
 
@@ -38,9 +41,7 @@ function toJson(req, names, values) {
 
   return JSON.stringify({
     _kind: 'grid',
-    meta: {
-      ver: req.version
-    },
+    meta: meta,
     cols: cols,
     rows: rows
   });
@@ -89,7 +90,7 @@ function toType(value) {
     if (value.startsWith('http')) {
       return {
         _kind: 'uri',
-        val: value//.substring(1, value.length - 1)
+        val: value
       }
     }
     return value;
@@ -102,22 +103,7 @@ function toType(value) {
         val: value.toISOString()
       };
     }
-
-
   }
-
-/*
-  if (typeof value === 'string') {
-    return {
-      _kind: 'uri',
-      val: value
-    };
-  }
-*/
-
-
-
-
   return value;
 }
 
@@ -139,6 +125,10 @@ function fromJson(res) {
   const rows = data.rows || [];
 
   res.version = meta.ver;
+  res.meta = {};
+
+  for (const name in meta)
+    res.meta[name] = fromType(meta[name]);
 
   res.names = [];
   res.values = [];
@@ -195,7 +185,7 @@ function fromType(value) {
           lon: value.lng
         };
       case 'dateTime':
-        return new Date(value.val);//value.val + ' ' + value.tz;
+        return new Date(value.val);
     }
   }
   return value;
